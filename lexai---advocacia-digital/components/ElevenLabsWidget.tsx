@@ -20,12 +20,21 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   
+  // Estados para controle de agendamento
+  const [hasOfferedScheduling, setHasOfferedScheduling] = useState(false);
+  const [userIssue, setUserIssue] = useState<string>('');
+  
   const conversationRef = useRef<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const hasOfferedSchedulingRef = useRef<boolean>(false);
 
   // Acessar variáveis de ambiente do Vite
   const AGENT_ID = import.meta.env.VITE_ELEVENLABS_AGENT_ID || '';
   const API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY || '';
+  const CALENDLY_LINK = import.meta.env.VITE_CALENDLY_LINK || 'https://calendly.com/ricardo-palomar-onsmartai/30min/?month=2026-01';
+  const CALENDLY_API_KEY = import.meta.env.VITE_CALENDLY_API_KEY || '';
+  const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY || '';
+  const OPENAI_MODEL = import.meta.env.VITE_OPENAI_MODEL || 'gpt-4o-mini';
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -68,14 +77,54 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
           setIsLoading(false);
         },
         onMessage: (message: any) => {
-          console.log('Mensagem recebida:', message);
+          console.log('Mensagem recebida (voz):', message);
+          
           if (message.message || message.text || message.transcript) {
             const text = message.message || message.text || message.transcript;
             const role = message.source === 'user' ? 'user' : 'ai';
-            setMessages(prev => [...prev, { 
-              role, 
-              text 
-            }]);
+            
+            console.log(`[VOZ] Role: ${role}, Text: "${text.substring(0, 100)}"`);
+            console.log(`[VOZ] hasOfferedSchedulingRef: ${hasOfferedSchedulingRef.current}`);
+            
+            // Se for mensagem da IA, verificar se ofereceu agendamento
+            if (role === 'ai') {
+              const isOffer = detectSchedulingOffer(text);
+              console.log(`[VOZ] É oferta de agendamento? ${isOffer}`);
+              if (isOffer) {
+                console.log('[VOZ] IA ofereceu agendamento - marcando estado');
+                handleSchedulingOffer();
+                // Continuar normalmente para adicionar a mensagem da IA
+              }
+            }
+            
+            // Se for mensagem do usuário e já oferecemos agendamento, verificar aceitação
+            if (role === 'user' && hasOfferedSchedulingRef.current) {
+              const isAcceptance = detectSchedulingAcceptance(text);
+              console.log(`[VOZ] É aceitação? ${isAcceptance}`);
+              
+              if (isAcceptance) {
+                console.log('[VOZ] ✅ ACEITAÇÃO DETECTADA - Interceptando e processando');
+                
+                // IMPORTANTE: Encerrar a conversa IMEDIATAMENTE para evitar que a IA responda
+                stopConversation();
+                hasOfferedSchedulingRef.current = false;
+                setHasOfferedScheduling(false);
+                
+                // Adicionar mensagem do usuário
+                const userMessageObj = { role: 'user' as const, text };
+                setMessages(prev => [...prev, userMessageObj]);
+                updateConversationContext(userMessageObj);
+                
+                // Processar agendamento e redirecionar (modo voz) - sem enviar para a IA
+                handleSchedulingAcceptance(text, 'voice');
+                return; // CRÍTICO: Não adicionar mensagem normal, não enviar para a IA
+              }
+            }
+            
+            // Mensagem normal - adicionar normalmente
+            const newMessage = { role, text };
+            setMessages(prev => [...prev, newMessage]);
+            updateConversationContext(newMessage);
           }
         },
         onError: (error: any) => {
@@ -144,14 +193,41 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
           setIsLoading(false);
         },
         onMessage: (message: any) => {
-          console.log('Mensagem recebida:', message);
+          console.log('Mensagem recebida (texto):', message);
           if (message.message || message.text || message.transcript) {
             const text = message.message || message.text || message.transcript;
             const role = message.source === 'user' ? 'user' : 'ai';
-            setMessages(prev => [...prev, { 
-              role, 
-              text 
-            }]);
+            
+            // Se for mensagem da IA, verificar se ofereceu agendamento
+            if (role === 'ai') {
+              if (detectSchedulingOffer(text)) {
+                // Apenas marcar que ofereceu agendamento, mas mostrar a mensagem normal da IA
+                console.log('IA ofereceu agendamento (texto) - aguardando aceitação do usuário');
+                handleSchedulingOffer();
+                // Continuar normalmente para adicionar a mensagem da IA
+              }
+            }
+            
+            // Se for mensagem do usuário e já oferecemos agendamento, verificar aceitação
+            if (role === 'user' && hasOfferedScheduling) {
+              if (detectSchedulingAcceptance(text)) {
+                console.log('Usuário aceitou agendamento (texto) - interceptando e enviando link');
+                
+                // Adicionar mensagem do usuário primeiro
+                const userMessageObj = { role: 'user' as const, text };
+                setMessages(prev => [...prev, userMessageObj]);
+                updateConversationContext(userMessageObj);
+                
+                // Processar agendamento (modo texto) - não enviar para a IA
+                handleSchedulingAcceptance(text, 'text');
+                return; // CRÍTICO: Não enviar para a IA
+              }
+            }
+            
+            // Mensagem normal - adicionar normalmente
+            const newMessage = { role, text };
+            setMessages(prev => [...prev, newMessage]);
+            updateConversationContext(newMessage);
           }
         },
         onError: (error: any) => {
@@ -192,6 +268,445 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
     await stopConversation();
     setMessages([]);
     setInputText('');
+    setHasOfferedScheduling(false);
+    hasOfferedSchedulingRef.current = false;
+    setUserIssue('');
+  };
+
+  // Função para detectar se a Sonia ofereceu agendamento
+  // Deve ser mais restritiva - só detectar quando realmente oferecer
+  const detectSchedulingOffer = (text: string): boolean => {
+    const lowerText = text.toLowerCase();
+    
+    // Padrões MUITO específicos que indicam uma oferta real de agendamento
+    // Deve conter tanto uma palavra de oferta quanto uma palavra de agendamento
+    const mustHaveOfferWord = /(posso|deseja|gostaria|quer|podemos|desejo|ofereço|sugiro|recomendo)/i.test(text);
+    const mustHaveSchedulingWord = /(agendar|agendamento|marcar|consulta|reunião|horário|especialista)/i.test(text);
+    
+    // Padrões específicos que indicam oferta clara
+    const clearOfferPatterns = [
+      /posso.*agendar.*(consulta|reunião|especialista)/i,
+      /deseja.*agendar.*(consulta|reunião|especialista)/i,
+      /gostaria.*agendar.*(consulta|reunião|especialista)/i,
+      /quer.*agendar.*(consulta|reunião|especialista)/i,
+      /podemos.*agendar.*(consulta|reunião|especialista)/i,
+      /agendar.*(consulta|reunião).*especialista/i,
+      /marcar.*(consulta|reunião).*especialista/i,
+      /(consulta|reunião).*especialista.*agendar/i,
+      /(consulta|reunião).*especialista.*marcar/i
+    ];
+    
+    // Verificar padrões claros primeiro
+    const matchesClearPattern = clearOfferPatterns.some(pattern => pattern.test(text));
+    
+    // Se não tiver padrão claro, verificar se tem AMBAS as palavras necessárias
+    // E também verificar se não é apenas uma pergunta do usuário
+    const isUserQuestion = /^(eu|minha|meu|estou|sou|tenho|preciso)/i.test(text.trim());
+    
+    // Só considerar oferta se:
+    // 1. Tem padrão claro OU
+    // 2. Tem palavra de oferta E palavra de agendamento E não é pergunta do usuário
+    return matchesClearPattern || (mustHaveOfferWord && mustHaveSchedulingWord && !isUserQuestion);
+  };
+
+  // Função para detectar se o usuário aceitou agendar
+  const detectSchedulingAcceptance = (text: string): boolean => {
+    if (!text || typeof text !== 'string') return false;
+    
+    const lowerText = text.toLowerCase().trim();
+    console.log(`[DETECÇÃO] Verificando aceitação no texto: "${lowerText}"`);
+    
+    // Respostas diretas de aceitação (mais flexível)
+    const directAcceptance = [
+      'sim',
+      'quero',
+      'aceito',
+      'ok',
+      'perfeito',
+      'ótimo',
+      'vamos',
+      'pode ser',
+      'claro',
+      'com certeza',
+      'pode',
+      'pode sim',
+      'quero sim',
+      'sim quero',
+      'sim por favor',
+      'quero agendar',
+      'quero marcar',
+      'sim quero agendar',
+      'sim quero marcar',
+      'quero sim agendar',
+      'quero sim marcar',
+      'pode agendar',
+      'pode marcar',
+      'vamos agendar',
+      'vamos marcar',
+      'aceito agendar',
+      'aceito marcar',
+      'tudo bem',
+      'tá bom',
+      'está bem',
+      'pode ser sim',
+      'quero isso',
+      'quero sim isso'
+    ];
+    
+    // Verificar se contém alguma frase de aceitação
+    const hasDirectAcceptance = directAcceptance.some(phrase => {
+      const found = lowerText.includes(phrase);
+      if (found) console.log(`[DETECÇÃO] ✅ Encontrou frase de aceitação: "${phrase}"`);
+      return found;
+    });
+    
+    if (hasDirectAcceptance) {
+      console.log('[DETECÇÃO] ✅ Aceitação detectada por frase direta');
+      return true;
+    }
+    
+    // Verificar padrões de aceitação
+    const acceptancePatterns = [
+      /^(sim|quero|aceito|ok|perfeito|ótimo|vamos|claro|pode).*$/i,
+      /.*(quero|aceito|vamos).*(agendar|marcar|consulta|reunião).*/i,
+      /.*(sim|ok|perfeito|ótimo).*(agendar|marcar|consulta|reunião).*/i,
+      /.*(agendar|marcar|consulta|reunião).*(sim|quero|aceito|ok).*/i
+    ];
+    
+    const matchesPattern = acceptancePatterns.some(pattern => {
+      const matches = pattern.test(text);
+      if (matches) console.log(`[DETECÇÃO] ✅ Padrão correspondido: ${pattern}`);
+      return matches;
+    });
+    
+    if (matchesPattern) {
+      console.log('[DETECÇÃO] ✅ Aceitação detectada por padrão');
+      return true;
+    }
+    
+    console.log('[DETECÇÃO] ❌ Aceitação NÃO detectada');
+    return false;
+  };
+
+  // Função para formatar descrição usando GPT
+  const formatDescriptionWithGPT = async (userIssue: string): Promise<string> => {
+    if (!OPENAI_API_KEY) {
+      console.warn('OPENAI_API_KEY não configurada, usando formatação básica');
+      return generateBasicDescription(userIssue);
+    }
+
+    try {
+      const prompt = `Você é um assistente jurídico profissional. Com base na seguinte dúvida/problema do cliente, crie uma descrição profissional e clara para ser enviada ao especialista em um agendamento.
+
+Dúvida/Problema do cliente:
+${userIssue || 'Cliente buscou orientação jurídica através do assistente virtual.'}
+
+Crie uma descrição profissional, objetiva e clara que:
+1. Seja formal e respeitosa
+2. Resuma o problema/dúvida do cliente de forma clara
+3. Seja útil para o especialista se preparar para a consulta
+4. Tenha no máximo 300 palavras
+5. Use português brasileiro formal
+
+Formato da resposta (sem markdown, apenas texto puro):
+Consulta agendada através do assistente virtual Sonia (Machado e Costa Advocacia).
+
+Problema/Dúvida do Cliente:
+[descrição formatada aqui]
+
+Este agendamento foi realizado após triagem inicial realizada pelo assistente virtual.`;
+
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: OPENAI_MODEL,
+          messages: [
+            {
+              role: 'system',
+              content: 'Você é um assistente jurídico profissional que formata descrições de consultas de forma clara e objetiva.'
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.7,
+          max_tokens: 500
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Erro na API OpenAI: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const formattedDescription = data.choices[0]?.message?.content?.trim() || '';
+      
+      if (formattedDescription) {
+        return formattedDescription;
+      } else {
+        throw new Error('Resposta vazia da API OpenAI');
+      }
+    } catch (error) {
+      console.error('Erro ao formatar descrição com GPT:', error);
+      // Fallback para formatação básica
+      return generateBasicDescription(userIssue);
+    }
+  };
+
+  // Função para gerar descrição básica (fallback)
+  const generateBasicDescription = (userIssue: string): string => {
+    let description = 'Consulta agendada através do assistente virtual Sonia (Machado e Costa Advocacia).\n\n';
+    
+    if (userIssue && userIssue.trim().length > 0) {
+      let formattedIssue = userIssue.trim();
+      formattedIssue = formattedIssue.charAt(0).toUpperCase() + formattedIssue.slice(1);
+      if (!/[.!?]$/.test(formattedIssue)) {
+        formattedIssue += '.';
+      }
+      description += `Problema/Dúvida do Cliente:\n${formattedIssue}\n\n`;
+    } else {
+      description += `Problema/Dúvida do Cliente:\nCliente buscou orientação jurídica através do assistente virtual.\n\n`;
+    }
+    
+    description += 'Este agendamento foi realizado após triagem inicial realizada pelo assistente virtual.';
+    return description;
+  };
+
+  // Função para gerar descrição profissional da dúvida/dor do usuário
+  const generateProfessionalDescription = async (): Promise<string> => {
+    // Extrair a dúvida principal das mensagens
+    const mainIssue = extractMainIssue(messages);
+    
+    // Usar GPT para formatar a descrição
+    return await formatDescriptionWithGPT(mainIssue);
+  };
+
+  // Função para criar link do Calendly com descrição
+  const createCalendlyLink = (description: string): string => {
+    const baseUrl = CALENDLY_LINK.split('?')[0];
+    const existingParams = CALENDLY_LINK.includes('?') ? CALENDLY_LINK.split('?')[1] : '';
+    
+    // Armazenar descrição completa no localStorage para uso posterior (webhook ou API)
+    const descriptionId = `calendly_desc_${Date.now()}`;
+    localStorage.setItem(descriptionId, description);
+    localStorage.setItem('last_calendly_description', description);
+    
+    // Calendly permite campos customizados via URL usando a1, a2, a3, etc.
+    // IMPORTANTE: O Calendly precisa ter uma pergunta customizada configurada no evento
+    // para que o parâmetro a1 funcione. Se não tiver, o texto não será pré-preenchido.
+    const params = new URLSearchParams(existingParams);
+    
+    // Limitar tamanho para evitar problemas com URLs muito longas
+    // Calendly tem limite de ~2000 caracteres na URL
+    const maxLength = 1500;
+    let descriptionToUse = description;
+    
+    if (description.length > maxLength) {
+      descriptionToUse = description.substring(0, maxLength) + '...';
+    }
+    
+    // IMPORTANTE: O Calendly precisa ter uma pergunta customizada configurada
+    // O parâmetro a1 corresponde à primeira pergunta customizada do evento
+    // URLSearchParams já faz a codificação necessária para URL automaticamente
+    // Não usar encodeURIComponent adicional para evitar dupla codificação
+    params.set('a1', descriptionToUse);
+    
+    // Armazenar descrição completa para referência
+    sessionStorage.setItem('calendly_description', description);
+    
+    return `${baseUrl}?${params.toString()}`;
+  };
+
+  // Função para marcar que a IA ofereceu agendamento (sem enviar link ainda)
+  const handleSchedulingOffer = () => {
+    // Apenas marcar que a IA ofereceu agendamento
+    // O link só será enviado quando o usuário ACEITAR
+    setHasOfferedScheduling(true);
+    hasOfferedSchedulingRef.current = true;
+    console.log('IA ofereceu agendamento - aguardando aceitação do usuário');
+  };
+
+  // Função para enviar link do Calendly quando usuário aceitar
+  const handleSchedulingAcceptance = async (userMessage?: string, mode: 'text' | 'voice' = 'text') => {
+    setIsLoading(true);
+    
+    try {
+      // Gerar descrição profissional baseada nas mensagens usando GPT
+      const description = await generateProfessionalDescription();
+      
+      // Criar link do Calendly
+      const calendlyLink = createCalendlyLink(description);
+      
+      if (mode === 'voice') {
+        // Modo VOZ: Agradecer de forma educada e redirecionar
+        const thankYouMessage = `Muito obrigada pelo contato! Foi um imenso prazer poder ajudá-la hoje. Desejo que tudo dê certo e que você encontre a solução que precisa. Agora vou direcioná-la para a página de agendamento com nosso especialista.\n\n🔗 ${calendlyLink}\n\nSe a página não abrir automaticamente, clique no link acima. Tenha um ótimo dia!`;
+        
+        // Adicionar mensagem de agradecimento com o link
+        setMessages(prev => [...prev, { 
+          role: 'ai', 
+          text: thankYouMessage 
+        }]);
+        
+        // Aguardar um pouco para a mensagem ser exibida e ouvida (4 segundos)
+        await new Promise(resolve => setTimeout(resolve, 4000));
+        
+        // Tentar abrir em nova aba, se falhar (pop-up bloqueado), redirecionar na mesma aba
+        try {
+          const newWindow = window.open(calendlyLink, '_blank');
+          
+          // Verificar se o pop-up foi bloqueado
+          if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+            console.log('Pop-up bloqueado, redirecionando na mesma aba');
+            // Se pop-up foi bloqueado, redirecionar na mesma aba após um breve delay
+            setTimeout(() => {
+              window.location.href = calendlyLink;
+            }, 1000);
+          }
+        } catch (error) {
+          console.error('Erro ao abrir pop-up:', error);
+          // Em caso de erro, redirecionar na mesma aba
+          setTimeout(() => {
+            window.location.href = calendlyLink;
+          }, 1000);
+        }
+        
+        // Resetar estados
+        setHasOfferedScheduling(false);
+        setIsLoading(false);
+      } else {
+        // Modo TEXTO: Enviar link no chat
+        const calendlyMessage = `Perfeito! Aqui está o link para você agendar sua consulta com nosso especialista:\n\n${calendlyLink}\n\nAo abrir o link, sua dúvida será automaticamente preenchida no campo de descrição. Se não aparecer automaticamente, você pode copiar e colar a descrição que está preparada para o especialista.`;
+        
+        setMessages(prev => {
+          // Evitar duplicação - verificar se já existe uma mensagem com o link
+          const hasCalendlyLink = prev.some(m => m.text.includes(calendlyLink));
+          if (hasCalendlyLink) {
+            return prev;
+          }
+          return [...prev, { 
+            role: 'ai', 
+            text: calendlyMessage 
+          }];
+        });
+
+        // Se tiver API key do Calendly, podemos usar webhook para pré-preencher
+        if (CALENDLY_API_KEY) {
+          try {
+            console.log('Descrição preparada para Calendly:', description);
+          } catch (error) {
+            console.error('Erro ao processar agendamento:', error);
+          }
+        }
+        
+        // Resetar estados
+        setHasOfferedScheduling(false);
+        setIsLoading(false);
+      }
+    } catch (error) {
+      console.error('Erro ao gerar descrição:', error);
+      setIsLoading(false);
+      
+      // Enviar link mesmo com erro na formatação
+      const fallbackDescription = generateBasicDescription(extractMainIssue(messages));
+      const calendlyLink = createCalendlyLink(fallbackDescription);
+      
+      if (mode === 'voice') {
+        // Modo VOZ: Agradecer e redirecionar mesmo com erro
+        const thankYouMessage = `Muito obrigada pelo contato! Foi um imenso prazer poder ajudá-la hoje. Desejo que tudo dê certo e que você encontre a solução que precisa. Agora vou direcioná-la para a página de agendamento com nosso especialista.\n\n🔗 ${calendlyLink}\n\nSe a página não abrir automaticamente, clique no link acima. Tenha um ótimo dia!`;
+        
+        setMessages(prev => [...prev, { 
+          role: 'ai', 
+          text: thankYouMessage 
+        }]);
+        
+        await new Promise(resolve => setTimeout(resolve, 4000));
+        
+        // Tentar abrir em nova aba, se falhar, redirecionar na mesma aba
+        try {
+          const newWindow = window.open(calendlyLink, '_blank');
+          if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+            setTimeout(() => {
+              window.location.href = calendlyLink;
+            }, 1000);
+          }
+        } catch (error) {
+          setTimeout(() => {
+            window.location.href = calendlyLink;
+          }, 1000);
+        }
+      } else {
+        // Modo TEXTO: Enviar link no chat
+        const calendlyMessage = `Perfeito! Aqui está o link para você agendar sua consulta com nosso especialista:\n\n${calendlyLink}\n\nAo selecionar a data e horário, sua dúvida será automaticamente compartilhada com o especialista para que possamos preparar melhor o atendimento.`;
+        
+        setMessages(prev => [...prev, { 
+          role: 'ai', 
+          text: calendlyMessage 
+        }]);
+      }
+      
+      setHasOfferedScheduling(false);
+    }
+  };
+
+  // Função para limpar e normalizar texto
+  const cleanText = (text: string): string => {
+    if (!text || typeof text !== 'string') return '';
+    
+    return text
+      .trim()
+      .replace(/\s+/g, ' ') // Múltiplos espaços em um
+      .replace(/\n+/g, ' ') // Quebras de linha em espaços
+      .replace(/[^\w\s.,!?;:()\-áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]/g, '') // Remover caracteres especiais exceto pontuação básica
+      .trim();
+  };
+
+  // Função para extrair a dúvida principal do usuário
+  const extractMainIssue = (messages: Message[]): string => {
+    // Pegar apenas mensagens do usuário que não são aceitação, saudações ou muito curtas
+    const userMessages = messages
+      .filter(m => {
+        if (m.role !== 'user') return false;
+        if (detectSchedulingAcceptance(m.text)) return false;
+        
+        const text = m.text.trim().toLowerCase();
+        // Filtrar saudações comuns
+        if (/^(oi|olá|ola|bom dia|boa tarde|boa noite|olá sonia|oi sonia)$/i.test(text)) return false;
+        // Filtrar mensagens muito curtas
+        if (text.length < 15) return false;
+        
+        return true;
+      })
+      .map(m => cleanText(m.text))
+      .filter(text => text.length > 15); // Filtrar mensagens muito curtas após limpeza
+    
+    if (userMessages.length === 0) return '';
+    
+    // Pegar a primeira mensagem relevante (geralmente é a dúvida principal)
+    let mainIssue = userMessages[0];
+    
+    // Limitar tamanho da mensagem principal
+    if (mainIssue.length > 300) {
+      mainIssue = mainIssue.substring(0, 300) + '...';
+    }
+    
+    return mainIssue;
+  };
+
+  // Função para atualizar contexto da conversa
+  const updateConversationContext = (newMessage: Message) => {
+    if (newMessage.role === 'user') {
+      // Não capturar mensagens de aceitação ou muito curtas
+      if (!detectSchedulingAcceptance(newMessage.text) && newMessage.text.trim().length > 10) {
+        // Atualizar apenas com a mensagem atual (será processada quando necessário)
+        setUserIssue(newMessage.text);
+      }
+    }
+    // Não precisamos mais do conversationContext completo, vamos usar apenas as mensagens
   };
 
   const handleToggleConversation = () => {
@@ -211,9 +726,28 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
     if (!inputText.trim() || !conversationRef.current || !isConnected) return;
     
     const userMessage = inputText.trim();
-    setMessages(prev => [...prev, { role: 'user', text: userMessage }]);
     setInputText('');
     setIsLoading(true);
+
+    // Verificar se o usuário aceitou agendar (antes de enviar para a IA)
+    if (hasOfferedScheduling && detectSchedulingAcceptance(userMessage)) {
+      console.log('Usuário aceitou agendamento no chat de texto - enviando link do Calendly');
+      setIsLoading(false);
+      
+      // Adicionar mensagem do usuário primeiro
+      const userMessageObj = { role: 'user' as const, text: userMessage };
+      setMessages(prev => [...prev, userMessageObj]);
+      updateConversationContext(userMessageObj);
+      
+      // Processar agendamento (modo texto - não enviar para a IA)
+      handleSchedulingAcceptance(userMessage, 'text');
+      return;
+    }
+
+    // Mensagem normal - adicionar e enviar para a IA
+    const userMessageObj = { role: 'user' as const, text: userMessage };
+    setMessages(prev => [...prev, userMessageObj]);
+    updateConversationContext(userMessageObj);
 
     try {
       // Enviar mensagem de texto para o agente
@@ -378,20 +912,101 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
                   </p>
                 </div>
               ) : (
-                messages.map((m, i) => (
-                  <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
-                    <div className={`max-w-[85%] p-4 rounded-2xl text-sm shadow-sm ${m.role === 'user' ? 'bg-gold text-black rounded-tr-none' : 'bg-navy-dark border border-gray-800 text-gray-200 rounded-tl-none'}`}>
-                      {m.text}
+                messages.map((m, i) => {
+                  // Função para renderizar links nas mensagens
+                  const renderMessageText = (text: string) => {
+                    // Detectar markdown links [text](url) primeiro
+                    const markdownLinkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+                    let processedText = text;
+                    const markdownLinks: Array<{ match: string; text: string; url: string }> = [];
+                    let match;
+                    
+                    while ((match = markdownLinkRegex.exec(text)) !== null) {
+                      markdownLinks.push({
+                        match: match[0],
+                        text: match[1],
+                        url: match[2]
+                      });
+                    }
+                    
+                    // Substituir markdown links por placeholders temporários
+                    markdownLinks.forEach((link, idx) => {
+                      processedText = processedText.replace(link.match, `__MARKDOWN_LINK_${idx}__`);
+                    });
+                    
+                    // Detectar URLs diretas
+                    const urlRegex = /(https?:\/\/[^\s]+)/g;
+                    const parts = processedText.split(urlRegex);
+                    
+                    return parts.map((part, idx) => {
+                      // Verificar se é um placeholder de markdown link
+                      const markdownMatch = part.match(/^__MARKDOWN_LINK_(\d+)__$/);
+                      if (markdownMatch) {
+                        const linkIndex = parseInt(markdownMatch[1]);
+                        const link = markdownLinks[linkIndex];
+                        return (
+                          <a
+                            key={idx}
+                            href={link.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-gold underline hover:text-yellow-400 break-all"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.open(link.url, '_blank');
+                            }}
+                          >
+                            {link.text}
+                          </a>
+                        );
+                      }
+                      
+                      // Verificar se é uma URL direta
+                      if (urlRegex.test(part)) {
+                        return (
+                          <a
+                            key={idx}
+                            href={part}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-gold underline hover:text-yellow-400 break-all"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.open(part, '_blank');
+                            }}
+                          >
+                            {part.length > 60 ? `${part.substring(0, 60)}...` : part}
+                          </a>
+                        );
+                      }
+                      
+                      // Texto normal - quebrar linhas
+                      return part.split('\n').map((line, lineIdx) => (
+                        <React.Fragment key={`${idx}-${lineIdx}`}>
+                          {line}
+                          {lineIdx < part.split('\n').length - 1 && <br />}
+                        </React.Fragment>
+                      ));
+                    });
+                  };
+                  
+                  return (
+                    <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
+                      <div className={`max-w-[85%] p-4 rounded-2xl text-sm shadow-sm ${m.role === 'user' ? 'bg-gold text-black rounded-tr-none' : 'bg-navy-dark border border-gray-800 text-gray-200 rounded-tl-none'}`}>
+                        <div className="whitespace-pre-wrap break-words">
+                          {renderMessageText(m.text)}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
               {isLoading && messages.length > 0 && (
                 <div className="flex justify-start">
                   <div className="bg-navy-dark border border-gray-800 text-gray-200 rounded-2xl rounded-tl-none p-4 text-sm">
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 bg-gold rounded-full animate-pulse"></div>
-                      LexAI está digitando...
+                      Machado e Costa está digitando...
                     </div>
                   </div>
                 </div>

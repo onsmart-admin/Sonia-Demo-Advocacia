@@ -28,7 +28,7 @@ const App: React.FC = () => {
         <section id="ia-assistente" className="py-24 bg-navy-card">
           <div className="container mx-auto px-6">
             <div className="max-w-4xl mx-auto text-center mb-12">
-              <h2 className="text-3xl font-serif text-gold mb-4">Consulta Inteligente LexAI</h2>
+              <h2 className="text-3xl font-serif text-gold mb-4">Consulta Inteligente Machado e Costa</h2>
               <p className="text-gray-400">
                 Experimente o futuro do atendimento jurídico. Converse com nosso assistente especializado por texto ou voz para triagem inicial e dúvidas frequentes.
               </p>

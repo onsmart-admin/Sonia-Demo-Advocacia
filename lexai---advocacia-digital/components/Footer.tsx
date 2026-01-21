@@ -11,7 +11,7 @@ const Footer: React.FC = () => {
               <div className="bg-gold p-1 rounded">
                 <svg className="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" /></svg>
               </div>
-              <span className="text-xl font-bold tracking-tighter text-white">LEX<span className="text-gold">AI</span></span>
+              <span className="text-xl font-bold tracking-tighter text-white">Machado e Costa <span className="text-gold">Advocacia</span></span>
             </div>
             <p className="text-gray-500 text-sm leading-relaxed max-w-xs">
               Redefinindo os limites do possível no mundo jurídico através da excelência profissional e tecnologia de ponta.
@@ -31,7 +31,7 @@ const Footer: React.FC = () => {
               <li className="flex items-start gap-4">
                 <svg className="w-5 h-5 text-gold mt-1 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
                 <div className="text-sm">
-                  <p className="text-white font-medium">contato@lexai.adv.br</p>
+                  <p className="text-white font-medium">contato@machadoecosta.adv.br</p>
                   <p className="text-gray-500">Respostas em até 24 horas úteis</p>
                 </div>
               </li>
@@ -48,7 +48,7 @@ const Footer: React.FC = () => {
 
         <div className="border-t border-gray-900 pt-10 flex flex-col md:flex-row justify-between items-center gap-6">
           <p className="text-[10px] text-gray-600 uppercase tracking-widest">
-            © 2025 LexAI Advocacia Inteligente. Todos os direitos reservados. OAB/SP 000.000.
+            © 2025 Machado e Costa Advocacia. Todos os direitos reservados. OAB/SP 000.000.
           </p>
           <p className="text-[10px] text-gray-700 uppercase tracking-widest">
             Powered by LEX - Advanced AI Agent Technology

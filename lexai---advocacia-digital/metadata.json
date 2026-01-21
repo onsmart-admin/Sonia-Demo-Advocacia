@@ -1,6 +1,6 @@
 
 {
-  "name": "LexAI - Advocacia Digital",
+  "name": "Machado e Costa Advocacia",
   "description": "Uma landpage moderna para um escritório de advocacia com foco em tecnologia e integração com agente de voz/texto da ElevenLabs.",
   "requestFramePermissions": [
     "microphone"
