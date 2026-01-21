@@ -27,6 +27,8 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
   const conversationRef = useRef<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const hasOfferedSchedulingRef = useRef<boolean>(false);
+  const lastModeRef = useRef<string>('');
+  const modeChangeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Acessar variáveis de ambiente do Vite
   const AGENT_ID = import.meta.env.VITE_ELEVENLABS_AGENT_ID || '';
@@ -134,7 +136,43 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
         },
         onModeChange: (mode: any) => {
           console.log('Modo mudou:', mode);
-          setIsSpeaking(mode.mode === 'speaking');
+          
+          // Limpar timeout anterior se existir
+          if (modeChangeTimeoutRef.current) {
+            clearTimeout(modeChangeTimeoutRef.current);
+          }
+          
+          const newMode = mode.mode || mode;
+          const isSpeaking = newMode === 'speaking';
+          
+          // Se mudou para "speaking", atualizar imediatamente
+          if (isSpeaking && lastModeRef.current !== 'speaking') {
+            console.log('[MODO] Mudando para SPEAKING');
+            lastModeRef.current = 'speaking';
+            setIsSpeaking(true);
+            return;
+          }
+          
+          // Se mudou para "listening" ou outro modo, aguardar um pouco para confirmar
+          // Isso evita trocas rápidas durante pausas na fala
+          if (!isSpeaking && lastModeRef.current === 'speaking') {
+            console.log('[MODO] Detectou possível mudança para LISTENING - aguardando confirmação...');
+            
+            modeChangeTimeoutRef.current = setTimeout(() => {
+              // Verificar novamente se ainda não está falando
+              // Se após 500ms ainda não voltou para speaking, confirma a mudança
+              if (lastModeRef.current === 'speaking') {
+                console.log('[MODO] Confirmando mudança para LISTENING');
+                lastModeRef.current = 'listening';
+                setIsSpeaking(false);
+              }
+            }, 500); // Aguardar 500ms antes de confirmar a mudança
+          } else if (!isSpeaking && lastModeRef.current !== 'listening') {
+            // Se não estava em speaking e mudou para outro modo, atualizar imediatamente
+            console.log('[MODO] Mudando para LISTENING (não estava falando)');
+            lastModeRef.current = 'listening';
+            setIsSpeaking(false);
+          }
         }
       };
 
@@ -251,6 +289,12 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
   };
 
   const stopConversation = async () => {
+    // Limpar timeout de mudança de modo
+    if (modeChangeTimeoutRef.current) {
+      clearTimeout(modeChangeTimeoutRef.current);
+      modeChangeTimeoutRef.current = null;
+    }
+    
     if (conversationRef.current) {
       try {
         await conversationRef.current.endSession();
@@ -261,6 +305,7 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
       setIsConnected(false);
       setIsSpeaking(false);
       setIsLoading(false);
+      lastModeRef.current = '';
     }
   };
 
