@@ -23,6 +23,9 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
   // Estados para controle de agendamento
   const [hasOfferedScheduling, setHasOfferedScheduling] = useState(false);
   const [userIssue, setUserIssue] = useState<string>('');
+  const [showRedirectModal, setShowRedirectModal] = useState(false);
+  const [redirectLink, setRedirectLink] = useState<string>('');
+  const [redirectCountdown, setRedirectCountdown] = useState(5);
   
   const conversationRef = useRef<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -48,6 +51,46 @@ const ElevenLabsWidget: React.FC<ElevenLabsWidgetProps> = ({ isOpen, onClose }) 
       stopConversation();
     }
   }, [isOpen]);
+
+  // Redirecionamento automático quando modal aparecer
+  useEffect(() => {
+    if (showRedirectModal && redirectLink) {
+      // Resetar contador quando modal aparecer
+      setRedirectCountdown(5);
+      
+      // Contador regressivo
+      const countdownInterval = setInterval(() => {
+        setRedirectCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(countdownInterval);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      // Aguardar 5 segundos antes de redirecionar automaticamente
+      const redirectTimer = setTimeout(() => {
+        try {
+          const newWindow = window.open(redirectLink, '_blank');
+          
+          // Verificar se o pop-up foi bloqueado
+          if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+            console.log('Pop-up bloqueado, redirecionando na mesma aba');
+            window.location.href = redirectLink;
+          }
+        } catch (error) {
+          console.error('Erro ao redirecionar:', error);
+          window.location.href = redirectLink;
+        }
+      }, 5000); // 5 segundos
+
+      return () => {
+        clearTimeout(redirectTimer);
+        clearInterval(countdownInterval);
+      };
+    }
+  }, [showRedirectModal, redirectLink]);
 
   // Iniciar conversa em modo voz
   const startVoiceConversation = async () => {
@@ -588,37 +631,9 @@ Este agendamento foi realizado após triagem inicial realizada pelo assistente v
       const calendlyLink = createCalendlyLink(description);
       
       if (mode === 'voice') {
-        // Modo VOZ: Agradecer de forma educada e redirecionar
-        const thankYouMessage = `Muito obrigada pelo contato! Foi um imenso prazer poder ajudá-la hoje. Desejo que tudo dê certo e que você encontre a solução que precisa. Agora vou direcioná-la para a página de agendamento com nosso especialista.\n\n🔗 ${calendlyLink}\n\nSe a página não abrir automaticamente, clique no link acima. Tenha um ótimo dia!`;
-        
-        // Adicionar mensagem de agradecimento com o link
-        setMessages(prev => [...prev, { 
-          role: 'ai', 
-          text: thankYouMessage 
-        }]);
-        
-        // Aguardar um pouco para a mensagem ser exibida e ouvida (4 segundos)
-        await new Promise(resolve => setTimeout(resolve, 4000));
-        
-        // Tentar abrir em nova aba, se falhar (pop-up bloqueado), redirecionar na mesma aba
-        try {
-          const newWindow = window.open(calendlyLink, '_blank');
-          
-          // Verificar se o pop-up foi bloqueado
-          if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
-            console.log('Pop-up bloqueado, redirecionando na mesma aba');
-            // Se pop-up foi bloqueado, redirecionar na mesma aba após um breve delay
-            setTimeout(() => {
-              window.location.href = calendlyLink;
-            }, 1000);
-          }
-        } catch (error) {
-          console.error('Erro ao abrir pop-up:', error);
-          // Em caso de erro, redirecionar na mesma aba
-          setTimeout(() => {
-            window.location.href = calendlyLink;
-          }, 1000);
-        }
+        // Modo VOZ: Mostrar modal de redirecionamento com agradecimento
+        setRedirectLink(calendlyLink);
+        setShowRedirectModal(true);
         
         // Resetar estados
         setHasOfferedScheduling(false);
@@ -661,29 +676,9 @@ Este agendamento foi realizado após triagem inicial realizada pelo assistente v
       const calendlyLink = createCalendlyLink(fallbackDescription);
       
       if (mode === 'voice') {
-        // Modo VOZ: Agradecer e redirecionar mesmo com erro
-        const thankYouMessage = `Muito obrigada pelo contato! Foi um imenso prazer poder ajudá-la hoje. Desejo que tudo dê certo e que você encontre a solução que precisa. Agora vou direcioná-la para a página de agendamento com nosso especialista.\n\n🔗 ${calendlyLink}\n\nSe a página não abrir automaticamente, clique no link acima. Tenha um ótimo dia!`;
-        
-        setMessages(prev => [...prev, { 
-          role: 'ai', 
-          text: thankYouMessage 
-        }]);
-        
-        await new Promise(resolve => setTimeout(resolve, 4000));
-        
-        // Tentar abrir em nova aba, se falhar, redirecionar na mesma aba
-        try {
-          const newWindow = window.open(calendlyLink, '_blank');
-          if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
-            setTimeout(() => {
-              window.location.href = calendlyLink;
-            }, 1000);
-          }
-        } catch (error) {
-          setTimeout(() => {
-            window.location.href = calendlyLink;
-          }, 1000);
-        }
+        // Modo VOZ: Mostrar modal mesmo com erro
+        setRedirectLink(calendlyLink);
+        setShowRedirectModal(true);
       } else {
         // Modo TEXTO: Enviar link no chat
         const calendlyMessage = `Perfeito! Aqui está o link para você agendar sua consulta com nosso especialista:\n\n${calendlyLink}\n\nAo selecionar a data e horário, sua dúvida será automaticamente compartilhada com o especialista para que possamos preparar melhor o atendimento.`;
@@ -895,16 +890,6 @@ Este agendamento foi realizado após triagem inicial realizada pelo assistente v
                     : 'Clique no botão abaixo para iniciar uma sessão de voz privada com nosso assistente.'}
               </p>
 
-              {/* Mostrar mensagens de voz também */}
-              {messages.length > 0 && (
-                <div className="w-full max-w-sm mb-4 max-h-32 overflow-y-auto space-y-2">
-                  {messages.slice(-3).map((m, i) => (
-                    <div key={i} className={`text-xs p-2 rounded ${m.role === 'user' ? 'bg-gold/20 text-gold' : 'bg-navy-dark text-gray-300'}`}>
-                      {m.role === 'user' ? 'Você' : 'Sonia'}: {m.text}
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
 
             {/* Botão sempre visível na parte inferior */}
@@ -1084,6 +1069,87 @@ Este agendamento foi realizado após triagem inicial realizada pelo assistente v
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 00-2 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
         Criptografia de Ponta a Ponta Lex-Safe
       </div>
+
+      {/* Modal de Redirecionamento */}
+      {showRedirectModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="bg-navy-card border border-gray-700 rounded-2xl shadow-2xl max-w-md w-[90vw] mx-4 p-6 animate-in zoom-in-95 duration-300">
+            {/* Avatar da Sonia */}
+            <div className="flex items-center gap-4 mb-4">
+              <div className="bg-gold/20 p-3 rounded-full">
+                <svg className="w-8 h-8 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-gold font-serif text-lg">Sonia</h3>
+                <p className="text-gray-400 text-xs">Assistente Virtual</p>
+              </div>
+            </div>
+
+            {/* Mensagem de Agradecimento */}
+            <div className="mb-6">
+              <p className="text-gray-200 text-sm leading-relaxed mb-4">
+                Muito obrigada pelo contato! Foi um imenso prazer poder ajudá-la hoje. Desejo que tudo dê certo e que você encontre a solução que precisa.
+              </p>
+              <p className="text-gray-300 text-sm font-medium">
+                Você será redirecionado para a página de agendamento em alguns segundos...
+              </p>
+            </div>
+
+            {/* Link do Calendly */}
+            <div className="bg-navy-dark border border-gray-800 rounded-lg p-4 mb-4">
+              <p className="text-gray-400 text-xs mb-2">Se o redirecionamento não funcionar, clique no link abaixo:</p>
+              <a
+                href={redirectLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-gold hover:text-yellow-400 text-sm break-all underline"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  window.open(redirectLink, '_blank');
+                }}
+              >
+                {redirectLink}
+              </a>
+            </div>
+
+            {/* Contador de redirecionamento */}
+            <div className="mb-4 text-center">
+              <p className="text-gray-400 text-xs">
+                Redirecionando automaticamente em <span className="text-gold font-bold text-base">{redirectCountdown}</span> segundos...
+              </p>
+            </div>
+
+            {/* Botão de Ir Agora */}
+            <button
+              onClick={() => {
+                setShowRedirectModal(false);
+                // Redirecionar imediatamente quando clicar
+                try {
+                  const newWindow = window.open(redirectLink, '_blank');
+                  if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+                    window.location.href = redirectLink;
+                  }
+                } catch (error) {
+                  window.location.href = redirectLink;
+                }
+              }}
+              className="w-full bg-gold text-black py-3 rounded-lg font-bold hover:bg-yellow-500 transition-all mb-2"
+            >
+              Ir para Agendamento Agora
+            </button>
+
+            {/* Botão de Fechar */}
+            <button
+              onClick={() => setShowRedirectModal(false)}
+              className="w-full bg-transparent border border-gray-700 text-gray-400 py-2 rounded-lg font-medium hover:bg-gray-800/50 transition-all text-sm"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
